@@ -1,0 +1,156 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>v2.1 Audio Hunter - مدى بعيد</title>
+<style>
+body{background:#000;color:#0f0;font-family:tahoma;margin:0;padding:15px;text-align:center}
+#ui{background:#111;border:2px solid #0f0;padding:15px;border-radius:10px;max-width:700px;margin:auto}
+button{background:#0f0;color:#000;border:none;padding:12px 20px;margin:5px;font-weight:bold;border-radius:5px;cursor:pointer;font-size:16px}
+canvas{border:2px solid #0f0;margin-top:10px;background:#000;width:100%}
+#status{color:#ff0;font-size:18px;margin:10px 0;font-weight:bold}
+#gainBox{background:#222;border:2px solid #ff0;padding:10px;margin:10px 0}
+label{color:#fff;font-size:14px}
+input{width:80%}
+#log{background:#000;border:1px solid #0f0;height:80px;overflow-y:auto;padding:6px;text-align:right;font-size:12px;color:#0ff}
+</style>
+</head>
+<body>
+
+<div id="ui">
+<h2>👻 v2.1 مدى بعيد - مايك قناص</h2>
+<button id="start">شغل المايك بأقصى مدى</button>
+
+<div id="gainBox">
+<label>التكبير القصوى: <span id="gval">30x</span></label><br>
+<input type="range" id="gain" min="1" max="50" value="30"><br>
+<small style="color:#ff0">تحذير: فوق 35x حتسمع صوت نفسك والكهرباء</small>
+</div>
+
+<div id="status">واقف - المايك مقفول</div>
+<canvas id="wave" width="700" height="180"></canvas>
+
+<h3 style="color:#0f0">أقوى تردد مكتشف:</h3>
+<div id="peakFreq" style="color:#ff0;font-size:20px">--- Hz</div>
+
+<h3 style="color:#0f0">سجل الأحداث:</h3>
+<div id="log"></div>
+</div>
+
+<script>
+const log = document.getElementById('log');
+const status = document.getElementById('status');
+const peakFreq = document.getElementById('peakFreq');
+const wave = document.getElementById('wave');
+const wctx = wave.getContext('2d');
+
+let audioCtx, mic, gainNode, analyser;
+let gainVal = 30;
+
+function addLog(msg){
+  let t = new Date().toLocaleTimeString();
+  log.innerHTML = '[' + t + '] ' + msg + '<br>' + log.innerHTML;
+}
+
+document.getElementById('start').onclick = async function(){
+  try{
+    // أهم خطوة: نوقف كل الفلاتر البتخرب الصوت البعيد
+    let constraints = {
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        sampleRate: 48000, // أعلى جودة
+        channelCount: 1,
+        latency: 0
+      }
+    };
+
+    let stream = await navigator.mediaDevices.getUserMedia(constraints);
+    audioCtx = new AudioContext({sampleRate: 48000});
+
+    // مكبر صوت وحش
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = gainVal;
+
+    mic = audioCtx.createMediaStreamSource(stream);
+    mic.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    // محلل بدقة عالية جداً
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 8192; // أعلى دقة ممكنة
+    analyser.smoothingTimeConstant = 0; // بدون تنعيم عشان نلقط أي نبضة
+    gainNode.connect(analyser);
+
+    status.innerText = 'المايك شغال بأقصى مدى ✓';
+    addLog('المايك فاتح بدون فلاتر + تكبير ' + gainVal + 'x');
+
+    drawWave();
+    findPeakFrequency();
+
+  }catch(e){
+    status.innerText = 'خطأ: ' + e.message;
+    alert(e.message);
+  }
+};
+
+function drawWave(){
+  let data = new Uint8Array(analyser.fftSize);
+  function loop(){
+    requestAnimationFrame(loop);
+    analyser.getByteTimeDomainData(data);
+    wctx.fillStyle = '#000';
+    wctx.fillRect(0,0,wave.width,wave.height);
+    wctx.lineWidth = 1.5;
+    wctx.strokeStyle = '#0f0';
+    wctx.beginPath();
+    let slice = wave.width / data.length;
+    let x = 0;
+    for(let i=0; i<data.length; i++){
+      let v = data[i] / 128.0;
+      let y = v * wave.height/2;
+      if(i===0) wctx.moveTo(x,y);
+      else wctx.lineTo(x,y);
+      x += slice;
+    }
+    wctx.stroke();
+  }
+  loop();
+}
+
+function findPeakFrequency(){
+  let dataArray = new Uint8Array(analyser.frequencyBinCount);
+  function check(){
+    analyser.getByteFrequencyData(dataArray);
+
+    let maxVal = 0;
+    let maxIndex = 0;
+    for(let i=0; i<dataArray.length; i++){
+      if(dataArray[i] > maxVal){
+        maxVal = dataArray[i];
+        maxIndex = i;
+      }
+    }
+
+    let freq = maxIndex * audioCtx.sampleRate / analyser.fftSize;
+    if(maxVal > 50){
+      peakFreq.innerText = Math.round(freq) + ' Hz - قوة: ' + maxVal;
+      if(freq < 100){
+        addLog('تردد واطي جداً: ' + Math.round(freq) + 'Hz - صوت ضخم');
+      }
+    }
+    setTimeout(check, 100);
+  }
+  check();
+}
+
+document.getElementById('gain').oninput = function(e){
+  gainVal = e.target.value;
+  document.getElementById('gval').innerText = gainVal + 'x';
+  if(gainNode) gainNode.gain.value = gainVal;
+  addLog('تم رفع التكبير لـ: ' + gainVal + 'x');
+};
+</script>
+</body>
+</html>
